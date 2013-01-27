@@ -1,0 +1,148 @@
+#!/usr/bin/ node
+
+/**
+ * Module dependencies.
+ */
+
+var program = require('commander');
+var fs = require('fs');
+var async = require('async');
+var exec = require('child_process').exec;
+
+var stdin = process.stdin,
+    stdout = process.stdout;
+
+
+program
+    .version('0.0.1')
+    .option('add, --add', 'Add site')
+    .option('list', 'List sites')
+    .parse(process.argv);
+
+if (program.add) {
+    // first, read apache template config file
+    var tpl_file = '/etc/apache2/sites-available/pmal_template',
+        new_config_file = '/etc/apache2/sites-available/'+ program.add;
+
+
+
+    var answers = [];
+
+    async.waterfall([
+        // First, asking all questions
+        function(callback) {
+            ask('Please enter domain name:', '', function(answer) {
+                answers.push(answer);
+                callback(null);
+            });
+        },
+        function(callback) {
+            ask('Enter config template file path: ['+ tpl_file +']', tpl_file, function(answer) {
+                answers.push(answer);
+                callback(null);
+            });
+        },
+        function(callback) {
+            var possible_dir = process.cwd() +'/'+ answers[0];
+            ask('Enter new site directory: ['+ possible_dir +']', possible_dir, function(answer) {
+                answers.push(answer);
+                callback(null);
+            });
+        },
+        function(callback) {
+            ask('Are you sure? [y]', 'y', function(answer) {
+                if(answer === 'y') {
+                    callback(null, {
+                        domain: answers[0],
+                        config_tpl_path: answers[1],
+                        dir: answers[2]
+                    });
+                }
+                else {
+                    process.exit(1);
+                }
+            });
+        },
+
+        // All questions answered, doing stuff!
+
+        // reading tpl file
+        function(config, callback) {
+            console.log('done');
+            console.log(config);
+
+            fs.readFile(tpl_file, 'UTF-8', function (err, data) {
+                if (err) throw err;
+                console.log('Reading template file... Ok');
+
+                // NOW, replacing data in file
+                data = data.replace('{document_root}', config.dir);
+                data = data.replace('{directory}', config.dir);
+
+                callback(null, config, data);
+            });
+        },
+        function(config, data, callback) {
+            fs.writeFile(new_config_file, data, function (err) {
+                if (err) throw err;
+
+                console.log('Writing config file... Ok.');
+
+                callback(null, config);
+            });
+        },
+
+        function(config, callback) {
+            console.log('writing to /etc/hosts...');
+
+            fs.appendFile('/etc/hosts', '127.0.3.1	'+ config.domain, function (err) {
+                callback(null, config);
+            });
+        },
+
+        function(config, callback) {
+            var child = exec('a2ensite '+ config.domain,
+                function (error, stdout, stderr) {
+                    if (error !== null) {
+                        console.log('exec error: ' + error);
+                    }
+                    else {
+                        console.log('Domain enabled');
+                        callback();
+                    }
+                });
+        },
+
+        // Now, restarting apache
+        function(callback) {
+            console.log('Restarting apache service...')
+            var child = exec('service apache2 restart',
+                function (error, stdout, stderr) {
+                    if (error !== null) {
+                        console.log('exec error: ' + error);
+                    }
+                    else {
+                        console.log('Done.');
+                        callback();
+                    }
+                });
+        }
+
+    ], function(err, result) {
+
+        console.log('done.');
+        process.exit(1);
+    });
+}
+
+
+function ask(question, default_value, callback) {
+    stdin.resume();
+    stdout.write(question);
+    stdin.once('data', function(data) {
+        data = data.toString().trim();
+        data = data ? data : default_value;
+
+        callback(data);
+    });
+}
